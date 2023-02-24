@@ -3,11 +3,11 @@ use tap::Tap as _;
 
 /// A list of _valid_ events.
 ///
-/// This is the "functional core" of the implementation.
+/// This is the ~"functional core" of the implementation.
 #[derive(Debug, Clone)]
 pub struct Ledger<UserIdT, AmountT, PublicKeyT, SignatureT> {
     events: Vec<LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT>>,
-    // TODO: cache state of the world, and recompute per event
+    users: hashbrown::HashMap<UserIdT, UserSummary<AmountT, PublicKeyT>>, // precomputed fold over the event history
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -27,8 +27,7 @@ where
     /// # Panics
     /// - if internal consistency is compromised
     ///
-    // This could be stored in the [Ledger] so we're not constantly recomputing it
-    pub fn users(&self) -> HashMap<UserIdT, UserSummary<AmountT, PublicKeyT>> {
+    fn fold_events(&self) -> HashMap<UserIdT, UserSummary<AmountT, PublicKeyT>> {
         self.events.iter().fold(HashMap::new(), |users, event| {
             users.tap_mut(|users| match event {
                 LedgerEvent::NewUser {
@@ -81,50 +80,8 @@ where
         })
     }
 
-    fn with_event_unchecked(
-        &self,
-        event: LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT>,
-    ) -> Self
-    where
-        SignatureT: Clone,
-    {
-        Self {
-            events: self.events.clone().tap_mut(|it| it.push(event)),
-        }
-    }
-
-    /// Fail with [AcceptEventError::NoSuchAccount] or [AcceptEventError::WouldOverflow] as appropriate
-    fn could_receive(
-        &self,
-        beneficiary: &UserIdT,
-        amount: &AmountT,
-    ) -> Result<UserSummary<AmountT, PublicKeyT>, AcceptEventError> {
-        match self.users().get(beneficiary) {
-            Some(user_summary) => match user_summary.balance.checked_add(amount) {
-                Some(_) => Ok(user_summary.clone()),
-                None => Err(AcceptEventError::WouldOverflow),
-            },
-            None => Err(AcceptEventError::NoSuchAccount),
-        }
-    }
-
-    /// Fail with [AcceptEventError::NoSuchAccount] or [AcceptEventError::WouldOverdraw] as appropriate.
-    fn could_send(
-        &self,
-        benefactor: &UserIdT,
-        amount: &AmountT,
-    ) -> Result<UserSummary<AmountT, PublicKeyT>, AcceptEventError> {
-        match self.users().get(benefactor) {
-            Some(user_summary) => match user_summary.balance.checked_sub(amount) {
-                Some(_) => Ok(user_summary.clone()),
-                None => Err(AcceptEventError::WouldOverdraw), // AmountT: num::Unsigned
-            },
-            None => Err(AcceptEventError::NoSuchAccount),
-        }
-    }
-
-    pub fn with_event<BlockIdT>(
-        &self,
+    pub fn try_accept_event<BlockIdT>(
+        &mut self,
         event: LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT>,
 
         // This is a bit of a quick and dirty implementation detail leaked to the outside.
@@ -133,47 +90,91 @@ where
         // For now, keep in this function.
         block_id: BlockIdT,
         event_index: usize,
-        transfer_verifier: impl FnOnce(
+        mut transfer_verifier: impl FnMut(
             TransferVerifierArgs<BlockIdT, &UserIdT, &AmountT, &PublicKeyT, &SignatureT>,
         ) -> Result<(), ()>,
-    ) -> Result<Self, AcceptEventError>
+    ) -> Result<(), AcceptEventError>
     where
         SignatureT: Clone,
     {
+        use hashbrown::hash_map::Entry::{Occupied, Vacant};
+        use AcceptEventError::{
+            CannotTransferToSelf, NoSuchAccount, UserIdTaken, WouldOverdraw, WouldOverflow,
+        };
+
         match &event {
             LedgerEvent::NewUser {
                 identifier,
-                public_key: _,
-            } => match self.users().contains_key(identifier) {
-                true => Err(AcceptEventError::UserIdTaken),
-                false => Ok(self.with_event_unchecked(event)),
+                public_key,
+            } => match self.users.entry(identifier.clone()) {
+                Occupied(_) => Err(UserIdTaken),
+                Vacant(vacancy) => {
+                    vacancy.insert(UserSummary {
+                        balance: AmountT::zero(),
+                        public_key: public_key.clone(),
+                    });
+                    self.events.push(event);
+                    Ok(())
+                }
             },
             LedgerEvent::Mint {
                 beneficiary,
                 amount,
             } => {
-                self.could_receive(beneficiary, amount)?;
-                Ok(self.with_event_unchecked(event))
+                // test
+                let beneficiary = self.users.get_mut(beneficiary).ok_or(NoSuchAccount)?;
+                let new_balance = beneficiary
+                    .balance
+                    .checked_add(amount)
+                    .ok_or(WouldOverflow)?;
+
+                // set
+                self.events.push(event);
+                beneficiary.balance = new_balance;
+                Ok(())
             }
             LedgerEvent::Transfer {
-                benefactor,
-                beneficiary,
+                benefactor: benefactor_id,
+                beneficiary: beneficiary_id,
                 amount,
                 benefactor_signature,
             } => {
-                self.could_receive(beneficiary, amount)?;
-                let benefactor_public_key = &self.could_send(benefactor, amount)?.public_key;
+                // test
+                if benefactor_id == beneficiary_id {
+                    return Err(CannotTransferToSelf);
+                }
+
+                let [benefactor, beneficiary] = self
+                    .users
+                    .get_many_mut([benefactor_id, beneficiary_id])
+                    .ok_or(NoSuchAccount)?;
+
+                let new_beneficiary_balance = beneficiary
+                    .balance
+                    .checked_add(amount)
+                    .ok_or(WouldOverflow)?;
+
+                let new_benefactor_balance = benefactor
+                    .balance
+                    .checked_sub(amount)
+                    .ok_or(WouldOverdraw)?;
+
                 transfer_verifier(TransferVerifierArgs {
                     block_id,
                     event_index,
-                    benefactor,
-                    beneficiary,
+                    benefactor: benefactor_id,
+                    beneficiary: beneficiary_id,
                     amount,
-                    benefactor_public_key,
+                    benefactor_public_key: &benefactor.public_key,
                     benefactor_signature,
                 })
                 .map_err(|_| AcceptEventError::InvalidSignature)?;
-                Ok(self.with_event_unchecked(event))
+
+                // set
+                self.events.push(event);
+                beneficiary.balance = new_beneficiary_balance;
+                benefactor.balance = new_benefactor_balance;
+                Ok(())
             }
         }
     }
@@ -201,6 +202,8 @@ pub enum AcceptEventError {
     WouldOverflow,
     #[error("invalid signature for transfer")]
     InvalidSignature,
+    #[error("benefactor and beneficiary of a transfer cannot be the same")]
+    CannotTransferToSelf,
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, enum_as_inner::EnumAsInner)]
