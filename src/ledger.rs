@@ -5,8 +5,8 @@ use tap::Tap as _;
 ///
 /// This is the "functional core" of the implementation.
 #[derive(Debug, Clone)]
-pub struct Ledger<IdentifierT, AmountT, PublicKeyT, SignatureT> {
-    events: Vec<LedgerEvent<IdentifierT, AmountT, PublicKeyT, SignatureT>>,
+pub struct Ledger<UserIdT, AmountT, PublicKeyT, SignatureT> {
+    events: Vec<LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT>>,
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -15,10 +15,9 @@ struct UserSummary<AmountT, PublicKeyT> {
     public_key: PublicKeyT,
 }
 
-impl<IdentifierT, AmountT, PublicKeyT, SignatureT>
-    Ledger<IdentifierT, AmountT, PublicKeyT, SignatureT>
+impl<UserIdT, AmountT, PublicKeyT, SignatureT> Ledger<UserIdT, AmountT, PublicKeyT, SignatureT>
 where
-    IdentifierT: Hash + Eq + Clone,
+    UserIdT: Hash + Eq + Clone,
     AmountT: Clone + num::CheckedAdd + num::CheckedSub + num::Zero + num::Unsigned,
     PublicKeyT: Clone,
 {
@@ -28,7 +27,7 @@ where
     /// - if internal consistency is compromised
     ///
     // This could be stored in the [Ledger] so we're not constantly recomputing it
-    fn users(&self) -> HashMap<IdentifierT, UserSummary<AmountT, PublicKeyT>> {
+    fn users(&self) -> HashMap<UserIdT, UserSummary<AmountT, PublicKeyT>> {
         self.events.iter().fold(HashMap::new(), |users, event| {
             users.tap_mut(|users| match event {
                 LedgerEvent::NewUser {
@@ -83,7 +82,7 @@ where
 
     fn with_event_unchecked(
         &self,
-        event: LedgerEvent<IdentifierT, AmountT, PublicKeyT, SignatureT>,
+        event: LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT>,
     ) -> Self
     where
         SignatureT: Clone,
@@ -96,7 +95,7 @@ where
     /// Fail with [AcceptEventError::NoSuchAccount] or [AcceptEventError::WouldOverflow] as appropriate
     fn could_receive(
         &self,
-        beneficiary: &IdentifierT,
+        beneficiary: &UserIdT,
         amount: &AmountT,
     ) -> Result<UserSummary<AmountT, PublicKeyT>, AcceptEventError> {
         match self.users().get(beneficiary) {
@@ -111,7 +110,7 @@ where
     /// Fail with [AcceptEventError::NoSuchAccount] or [AcceptEventError::WouldOverdraw] as appropriate.
     fn could_send(
         &self,
-        benefactor: &IdentifierT,
+        benefactor: &UserIdT,
         amount: &AmountT,
     ) -> Result<UserSummary<AmountT, PublicKeyT>, AcceptEventError> {
         match self.users().get(benefactor) {
@@ -125,7 +124,7 @@ where
 
     pub fn with_event<BlockIdT>(
         &self,
-        event: LedgerEvent<IdentifierT, AmountT, PublicKeyT, SignatureT>,
+        event: LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT>,
 
         // This is a bit of a quick and dirty implementation detail leaked to the outside.
         // Really we should have a TransferVerifierT: TransferVerifier on the Ledger, since verification is fixed for a ledger.
@@ -134,7 +133,7 @@ where
         block_id: BlockIdT,
         event_index: usize,
         transfer_verifier: impl FnOnce(
-            TransferVerifierArgs<BlockIdT, &IdentifierT, &AmountT, &PublicKeyT, &SignatureT>,
+            TransferVerifierArgs<BlockIdT, &UserIdT, &AmountT, &PublicKeyT, &SignatureT>,
         ) -> Result<(), ()>,
     ) -> Result<Self, AcceptEventError>
     where
@@ -145,7 +144,7 @@ where
                 identifier,
                 public_key: _,
             } => match self.users().contains_key(identifier) {
-                true => Err(AcceptEventError::IdentifierTaken),
+                true => Err(AcceptEventError::UserIdTaken),
                 false => Ok(self.with_event_unchecked(event)),
             },
             LedgerEvent::Mint {
@@ -179,11 +178,11 @@ where
     }
 }
 
-pub struct TransferVerifierArgs<BlockIdT, IdentifierT, AmountT, PublicKeyT, SignatureT> {
+pub struct TransferVerifierArgs<BlockIdT, UserIdT, AmountT, PublicKeyT, SignatureT> {
     pub block_id: BlockIdT,
     pub event_index: usize,
-    pub benefactor: IdentifierT,
-    pub beneficiary: IdentifierT,
+    pub benefactor: UserIdT,
+    pub beneficiary: UserIdT,
     pub amount: AmountT,
     pub benefactor_public_key: PublicKeyT,
     pub benefactor_signature: SignatureT,
@@ -192,7 +191,7 @@ pub struct TransferVerifierArgs<BlockIdT, IdentifierT, AmountT, PublicKeyT, Sign
 #[derive(Debug, thiserror::Error)]
 pub enum AcceptEventError {
     #[error("a user with the requested identifier already exists")]
-    IdentifierTaken,
+    UserIdTaken,
     #[error("would overdraw an account")]
     WouldOverdraw,
     #[error("an account in this event does not exist")]
@@ -204,19 +203,19 @@ pub enum AcceptEventError {
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, enum_as_inner::EnumAsInner)]
-pub enum LedgerEvent<IdentifierT, AmountT, PublicKeyT, SignatureT> {
+pub enum LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT> {
     // must have a new user message so that the ledger knows the public key for verification, right?
     NewUser {
-        identifier: IdentifierT,
+        identifier: UserIdT,
         public_key: PublicKeyT,
     },
     Mint {
-        beneficiary: IdentifierT,
+        beneficiary: UserIdT,
         amount: AmountT,
     },
     Transfer {
-        benefactor: IdentifierT,
-        beneficiary: IdentifierT,
+        benefactor: UserIdT,
+        beneficiary: UserIdT,
         amount: AmountT,
         benefactor_signature: SignatureT,
     },
