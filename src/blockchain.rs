@@ -48,7 +48,7 @@ where
         block: Block<BlockIdT, UserIdT, AmountT, PublicKeyT, SignatureT>,
     ) -> Result<(), AddBlockError> {
         use std::collections::hash_map::Entry;
-        match self.block_ids_to_blocks.entry(block.id.clone()) {
+        match self.block_ids_to_blocks.entry(block.id) {
             Entry::Occupied(already) if already.get() == &block => Ok(()), // idempotent
             Entry::Occupied(_) => Err(AddBlockError::WouldClobber),
             Entry::Vacant(vacancy) => {
@@ -83,7 +83,7 @@ where
         let mut winner = Vec::new();
         for root in self.root_blocks() {
             for leaf in self.leaf_blocks() {
-                if root == leaf && winner.len() == 0 {
+                if root == leaf && winner.is_empty() {
                     winner.push(*root);
                     continue;
                 }
