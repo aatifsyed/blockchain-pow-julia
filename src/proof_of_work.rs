@@ -15,8 +15,12 @@ pub struct WithProofOfWork<T> {
     pub inner: T,
 }
 
+// is julia set continuous? Can we do gradient traversal?
+// TODO: find the actual set and work outwards by a certain step?
 pub fn do_work(
     c: num::Complex<f64>,
+    // can this set be a line in the plane instead?
+    // how do we guarantee that there's a solution??
     re_min: f64,
     re_max: f64,
     target_iterations: u16,
@@ -45,7 +49,6 @@ fn iterate_julia(c: num::Complex<f64>, z: num::Complex<f64>) -> num::Complex<f64
     z.powu(2) + c
 }
 
-// is julia set continuous? Can we do gradient traversal?
 // how can we deal with floating point errors?
 pub fn check_work(
     c: num::Complex<f64>,
@@ -67,7 +70,38 @@ pub fn check_work(
     Err(DoWorkError::LeftSetTooLateOrNotAtAll)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoWorkError {
     LeftSetTooEarly,
     LeftSetTooLateOrNotAtAll,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test() {
+        for (re, im) in [
+            (0.11138718573116269, 0.6446882805476304),
+            (0.11232679155599146, 0.6438061412699541),
+            (0.11688921798334584, 0.6296760648969593),
+            (0.11728813049958475, 0.6323731120056992),
+            (0.12027361411928883, 0.6239700013549823),
+            (0.1260266314193701, 0.6482785883603248),
+            (0.12639281514111322, 0.6472206350658807),
+            (0.1303472825420846, 0.6473682269192866),
+            (0.1303472825420846, 0.6473682269192866),
+        ] {
+            assert_eq!(
+                check_work(
+                    num::Complex { re: 0.5, im: 0.5 },
+                    0.0,
+                    0.5,
+                    num::Complex { re, im },
+                    10
+                ),
+                Ok(num::Complex { re, im })
+            )
+        }
+    }
 }
