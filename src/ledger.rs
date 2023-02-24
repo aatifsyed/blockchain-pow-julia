@@ -7,10 +7,11 @@ use tap::Tap as _;
 #[derive(Debug, Clone)]
 pub struct Ledger<UserIdT, AmountT, PublicKeyT, SignatureT> {
     events: Vec<LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT>>,
+    // TODO: cache state of the world, and recompute per event
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-struct UserSummary<AmountT, PublicKeyT> {
+pub struct UserSummary<AmountT, PublicKeyT> {
     balance: AmountT,
     public_key: PublicKeyT,
 }
@@ -27,7 +28,7 @@ where
     /// - if internal consistency is compromised
     ///
     // This could be stored in the [Ledger] so we're not constantly recomputing it
-    fn users(&self) -> HashMap<UserIdT, UserSummary<AmountT, PublicKeyT>> {
+    pub fn users(&self) -> HashMap<UserIdT, UserSummary<AmountT, PublicKeyT>> {
         self.events.iter().fold(HashMap::new(), |users, event| {
             users.tap_mut(|users| match event {
                 LedgerEvent::NewUser {
