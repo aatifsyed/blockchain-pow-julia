@@ -6,9 +6,9 @@ use crate::LedgerEvent;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Block<BlockIdT, UserIdT, AmountT, PublicKeyT, SignatureT> {
-    parent: Option<BlockIdT>,
-    id: BlockIdT,
-    events: Vec<LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT>>,
+    pub parent: Option<BlockIdT>,
+    pub id: BlockIdT,
+    pub events: Vec<LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT>>,
 }
 
 /// Keeps track of blocks.
@@ -46,10 +46,10 @@ where
     pub fn add_block(
         &mut self,
         block: Block<BlockIdT, UserIdT, AmountT, PublicKeyT, SignatureT>,
-    ) -> Result<(), AddBlockError> {
+    ) -> Result<AddBlockOk, AddBlockError> {
         use std::collections::hash_map::Entry;
         match self.block_ids_to_blocks.entry(block.id) {
-            Entry::Occupied(already) if already.get() == &block => Ok(()), // idempotent
+            Entry::Occupied(already) if already.get() == &block => Ok(AddBlockOk::Noop), // idempotent
             Entry::Occupied(_) => Err(AddBlockError::WouldClobber),
             Entry::Vacant(vacancy) => {
                 vacancy.insert(block.clone());
@@ -58,17 +58,19 @@ where
                         // fast path - we don't need to recalculate the winning chain
                         self.block_id_graph.add_edge(parent, block.id, ());
                         self.winning_chain.push(block);
+                        Ok(AddBlockOk::CanAddNewEventsToLedger)
                     }
                     (Some(parent), _) => {
                         self.block_id_graph.add_edge(parent, block.id, ());
                         self.winning_chain = self.calculate_winning_chain();
+                        Ok(AddBlockOk::MustRebuildCache)
                     }
                     (None, _) => {
                         self.block_id_graph.add_node(block.id);
                         self.winning_chain = self.calculate_winning_chain();
+                        Ok(AddBlockOk::MustRebuildCache)
                     }
                 }
-                Ok(())
             }
         }
     }
@@ -133,6 +135,13 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum AddBlockOk {
+    MustRebuildCache,
+    CanAddNewEventsToLedger,
+    Noop,
+}
+
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 pub enum AddBlockError {
     #[error("block with the same id but different contents is already in the block graph")]
@@ -152,7 +161,7 @@ mod tests {
                 id,
                 events: vec![],
             })
-            .unwrap()
+            .unwrap();
     }
 
     fn assert_winning_chain(graph: &TestBlockGraph, chain: impl IntoIterator<Item = char>) {

@@ -28,6 +28,8 @@ where
     /// - if internal consistency is compromised
     ///
     // This could be stored in the [Ledger] so we're not constantly recomputing it
+    // this is done on the `mutable-ledger` branch, but I'm sticking with this implementation
+    // because it allows us to reject an invalid block more easily.
     pub fn users(&self) -> HashMap<UserIdT, UserSummary<AmountT, PublicKeyT>> {
         self.events.iter().fold(HashMap::new(), |users, event| {
             users.tap_mut(|users| match event {
@@ -123,6 +125,7 @@ where
         }
     }
 
+    // TODO(vectorised version)
     pub fn with_event<BlockIdT>(
         &self,
         event: LedgerEvent<UserIdT, AmountT, PublicKeyT, SignatureT>,
